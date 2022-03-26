@@ -1,11 +1,13 @@
 const express = require('express');
 const Dog = require('../models/dog');
+const authenticate = require("../authenticate");
 
 const dogSearchRouter = express.Router();
 
 dogSearchRouter.route('/')
     .get((req, res, next) => {
         Dog.find()
+            .populate('comments.author')
             .then(dogs => {
                 res.statusCode = 200;
                 res.setHeader('Content-Type', 'application/json');
@@ -13,7 +15,7 @@ dogSearchRouter.route('/')
             })
             .catch(err => next(err));
     })
-    .post((req, res, next) => {
+    .post(authenticate.verifyUser, authenticate.verifyAdmin, (req, res, next) => {
         Dog.create(req.body)
             .then(dog => {
                 console.log('Dog Profile Created ', dog);
@@ -23,11 +25,11 @@ dogSearchRouter.route('/')
             })
             .catch(err => next(err));
     })
-    .put((req, res) => {
+    .put(authenticate.verifyUser, (req, res) => {
         res.statusCode = 403;
         res.end('PUT operation not supported on /dogs');
     })
-    .delete((req, res, next) => {
+    .delete(authenticate.verifyUser, authenticate.verifyAdmin, (req, res, next) => {
         Dog.deleteMany()
             .then(response => {
                 res.statusCode = 200;
@@ -40,6 +42,7 @@ dogSearchRouter.route('/')
 dogSearchRouter.route('/:dogId')
     .get((req, res, next) => {
         Dog.findById(req.params.dogId)
+            .populate('comments.author')
             .then(dog => {
                 res.statusCode = 200;
                 res.setHeader('Content-Type', 'application/json');
@@ -47,11 +50,11 @@ dogSearchRouter.route('/:dogId')
             })
             .catch(err => next(err));
     })
-    .post((req, res) => {
+    .post(authenticate.verifyUser, (req, res) => {
         res.statusCode = 403;
         res.end(`POST operation not supported on /dogs/${req.params.dogId}`);
     })
-    .put((req, res, next) => {
+    .put(authenticate.verifyUser, authenticate.verifyAdmin, (req, res, next) => {
         Dog.findByIdAndUpdate(req.params.dogId, {
             $set: req.body
         }, { new: true })
@@ -62,7 +65,7 @@ dogSearchRouter.route('/:dogId')
             })
             .catch(err => next(err));
     })
-    .delete((req, res, next) => {
+    .delete(authenticate.verifyUser, authenticate.verifyAdmin, (req, res, next) => {
         Dog.findByIdAndDelete(req.params.dogId)
             .then(response => {
                 res.statusCode = 200;
@@ -75,6 +78,7 @@ dogSearchRouter.route('/:dogId')
 dogSearchRouter.route('/:dogId/comments')
     .get((req, res, next) => {
         Dog.findById(req.params.dogId)
+            .populate('comments.author')
             .then(dog => {
                 if (dog) {
                     res.statusCode = 200;
@@ -88,10 +92,11 @@ dogSearchRouter.route('/:dogId/comments')
             })
             .catch(err => next(err));
     })
-    .post((req, res, next) => {
+    .post(authenticate.verifyUser, (req, res, next) => {
         Dog.findById(req.params.dogId)
             .then(dog => {
                 if (dog) {
+                    req.body.author = req.user._id;
                     dog.comments.push(req.body);
                     dog.save()
                         .then(dog => {
@@ -108,11 +113,11 @@ dogSearchRouter.route('/:dogId/comments')
             })
             .catch(err => next(err));
     })
-    .put((req, res) => {
+    .put(authenticate.verifyUser, (req, res) => {
         res.statusCode = 403;
         res.end(`PUT operation not supported on /dogs/${req.params.dogId}/comments`);
     })
-    .delete((req, res, next) => {
+    .delete(authenticate.verifyUser, authenticate.verifyAdmin, (req, res, next) => {
         Dog.findById(req.params.dogId)
             .then(dog => {
                 if (dog) {
@@ -138,6 +143,7 @@ dogSearchRouter.route('/:dogId/comments')
 dogSearchRouter.route('/:dogId/comments/:commentId')
     .get((req, res, next) => {
         Dog.findById(req.params.dogId)
+            .populate('comments.author')
             .then(dog => {
                 if (dog && dog.comments.id(req.params.commentId)) {
                     res.statusCode = 200;
@@ -155,27 +161,33 @@ dogSearchRouter.route('/:dogId/comments/:commentId')
             })
             .catch(err => next(err));
     })
-    .post((req, res) => {
+    .post(authenticate.verifyUser, (req, res) => {
         res.statusCode = 403;
         res.end(`POST operation not supported on /dogs/${req.params.dogId}/comments/${req.params.commentId}`);
     })
-    .put((req, res, next) => {
+    .put(authenticate.verifyUser, (req, res, next) => {
         Dog.findById(req.params.dogId)
             .then(dog => {
                 if (dog && dog.comments.id(req.params.commentId)) {
-                    if (req.body.rating) {
-                        dog.comments.id(req.params.commentId).rating = req.body.rating;
+                    if (dogs.comments.id(req.params.commentId).author._id.equals(req.user.id)) {
+                        if (req.body.rating) {
+                            dog.comments.id(req.params.commentId).rating = req.body.rating;
+                        }
+                        if (req.body.text) {
+                            dog.comments.id(req.params.commentId).text = req.body.text;
+                        }
+                        dog.save()
+                            .then(dog => {
+                                res.statusCode = 200;
+                                res.setHeader('Content-Type', 'application/json');
+                                res.json(dog);
+                            })
+                            .catch(err => next(err));
+                    } else {
+                        err = new Error(`You're not authorized to update this comment`);
+                        err.status = 404;
+                        return next(err);
                     }
-                    if (req.body.text) {
-                        dog.comments.id(req.params.commentId).text = req.body.text;
-                    }
-                    dog.save()
-                        .then(dog => {
-                            res.statusCode = 200;
-                            res.setHeader('Content-Type', 'application/json');
-                            res.json(dog);
-                        })
-                        .catch(err => next(err));
                 } else if (!dog) {
                     err = new Error(`Dog ${req.params.dogId} not found`);
                     err.status = 404;
@@ -188,18 +200,24 @@ dogSearchRouter.route('/:dogId/comments/:commentId')
             })
             .catch(err => next(err));
     })
-    .delete((req, res, next) => {
+    .delete(authenticate.verifyUser, (req, res, next) => {
         Dog.findById(req.params.dogId)
             .then(dog => {
                 if (dog && dog.comments.id(req.params.commentId)) {
-                    dog.comments.id(req.params.commentId).remove();
-                    dog.save()
-                        .then(dog => {
-                            res.statusCode = 200;
-                            res.setHeader('Content-Type', 'application/json');
-                            res.json(dog);
-                        })
-                        .catch(err => next(err));
+                    if (dogs.comments.id(req.params.commentId).author._id.equals(req.user.id)) {
+                        dog.comments.id(req.params.commentId).remove();
+                        dog.save()
+                            .then(dog => {
+                                res.statusCode = 200;
+                                res.setHeader('Content-Type', 'application/json');
+                                res.json(dog);
+                            })
+                            .catch(err => next(err));
+                    } else {
+                        err = new Error(`You're not authorized to delete this comment`);
+                        err.status = 404;
+                        return next(err);
+                    }
                 } else if (!dog) {
                     err = new Error(`Dog ${req.params.dogId} not found`);
                     err.status = 404;
@@ -212,5 +230,6 @@ dogSearchRouter.route('/:dogId/comments/:commentId')
             })
             .catch(err => next(err));
     });
+
 
 module.exports = dogSearchRouter;
